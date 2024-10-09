@@ -10,6 +10,15 @@ from utils.print_args import print_args
 import random
 import numpy as np
 
+def load_content(args):
+    if 'ETT' in args.data:
+        file = 'ETT'
+    else:
+        file = args.data
+    with open('./prompt_bank/{0}.txt'.format(file), 'r') as f:
+        content = f.read()
+    return content
+
 if __name__ == '__main__':
     fix_seed = 2021
     random.seed(fix_seed)
@@ -134,6 +143,8 @@ if __name__ == '__main__':
         args.gpu = args.device_ids[0]
 
     print('Args in experiment:')
+
+    args.content = load_content(args)
     print_args(args)
 
     if args.task_name == 'long_term_forecast':

@@ -1,8 +1,13 @@
+import os
+os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
 import torch
 import torch.nn as nn
 from einops import rearrange
 from peft import LoraConfig, TaskType, get_peft_model
+from transformers import GPT2Tokenizer
+
 from models.GPT2_arch import AccustumGPT2Model
+from layers.TimesNet import TimesNet
 
 class Encoder_PCA(nn.Module):
     def __init__(self, input_dim, word_embedding, hidden_dim=768, num_heads=12, num_encoder_layers=1):
@@ -33,11 +38,47 @@ class Encoder_PCA(nn.Module):
         x = x.transpose(0, 1)
         return x_time, x
 
+def calcute_lags(x_enc):
+    q_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
+    k_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
+    res = q_fft * torch.conj(k_fft)
+    corr = torch.fft.irfft(res, dim=-1)
+    mean_value = torch.mean(corr, dim=1)
+    _, lags = torch.topk(mean_value, 5, dim=-1)
+    return lags
+def prompt_build(x,description,seq_len,pred_len):
+    B, T, N = x.shape
+    prompt = []
+    x_enc = x.permute(0, 2, 1).contiguous().reshape(B * N, T, 1)
+    min_values = torch.min(x_enc, dim=1)[0]  # 计算每个时间序列的最小值
+    max_values = torch.max(x_enc, dim=1)[0]  # 计算每个时间序列的最大值
+    medians = torch.median(x_enc, dim=1).values  # 计算每个时间序列的中位数
+    lags = calcute_lags(x_enc)  # 调用自定义的函数计算“时滞”（lags）
+    trends = x_enc.diff(dim=1).sum(dim=1)  # 计算每个时间序列的趋势（即每个时间步之间的差异之和）
+    for b in range(x_enc.shape[0]):
+        min_values_str = str(min_values[b].tolist()[0])  # 将最小值转换为字符串
+        max_values_str = str(max_values[b].tolist()[0])  # 将最大值转换为字符串
+        median_values_str = str(medians[b].tolist()[0])  # 将中位数转换为字符串
+        lags_values_str = str(lags[b].tolist())  # 将时滞转换为字符串
+        prompt_ = (
+            f"<|start_prompt|>Dataset description: {description}"  # 数据集描述
+            f"Task description: forecast the next {str(pred_len)} steps given the previous {str(seq_len)} steps information; "
+            "Input statistics: "
+            f"min value {min_values_str}, "
+            f"max value {max_values_str}, "
+            f"median value {median_values_str}, "
+            f"the trend of input is {'upward' if trends[b] > 0 else 'downward'}, "  # 根据趋势值生成上升或下降趋势描述
+            f"top 5 lags are : {lags_values_str}<|<end_prompt>|>"  # 显示前5个时滞
+        )
+        prompt.append(prompt_)
+    return prompt
+
 class Model(nn.Module):
     def __init__(self, configs, device):
         super(Model, self).__init__()
         self.pred_len = configs.pred_len
-        
+        self.seq_len = configs.seq_len
+        self.content = configs.content
         peft_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM, 
             inference_mode=False, 
@@ -51,7 +92,8 @@ class Model(nn.Module):
     
         self.gpt2 = AccustumGPT2Model.from_pretrained('gpt2', output_attentions=True, output_hidden_states=True)  # loads a pretrained GPT-2 base model
         self.gpt2_text = AccustumGPT2Model.from_pretrained('gpt2', output_attentions=True, output_hidden_states=True)  # loads a pretrained GPT-2 base model
-
+        self.tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+        self.tokenizer.pad_token = self.tokenizer.eos_token
         self.gpt2.h = self.gpt2.h[:configs.gpt_layers]
         self.gpt2_text.h = self.gpt2_text.h[:configs.gpt_layers]
         self.gpt2 = get_peft_model(self.gpt2, peft_config)
@@ -90,6 +132,9 @@ class Model(nn.Module):
             layer.train()
         
         self.cnt = 0
+
+        self.timesnet = TimesNet(configs,device).to(device)
+
         
 
     def forecast(self, x):
@@ -100,11 +145,23 @@ class Model(nn.Module):
         stdev = torch.sqrt(torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5).detach() 
         x /= stdev
 
+        # create prompt
+        prompt = prompt_build(x,self.content,self.seq_len,self.pred_len)
+
+        prompt = self.tokenizer(prompt, return_tensors="pt", padding=True, truncation=True, max_length=2048).input_ids
+
+        prompt_embeddings = self.gpt2.get_input_embeddings()(prompt.to(x.device))  # (batch, prompt_token, dim)
+
+        # times net 1D->2D->1D
+        x = self.timesnet.forward(x)
+
         x = rearrange(x, 'b l m -> b m l')
 
         outputs_time1, outputs_text1 = self.in_layer(x)
 
         outputs_time, intermidiate_feat_time = self.gpt2(inputs_embeds=outputs_time1)
+
+
         outputs_text, intermidiate_feat_text = self.gpt2_text(inputs_embeds=outputs_text1)
         # residue connection
         outputs_time += outputs_time1
