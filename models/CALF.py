@@ -73,6 +73,19 @@ def prompt_build(x,description,seq_len,pred_len):
         prompt.append(prompt_)
     return prompt
 
+def prompt_concat(prompt,x):
+    B, L, N = x.shape
+    x = x.permute(0, 2, 1).contiguous()  # 调整为 [B, N, L]
+    x = x.view(B * N, L, 1)  # 展平为 [B*N, L, 1]，以便于和每个变量对应的提示词拼接
+    dim = prompt.size(2)
+
+    # 为了在序列维度拼接，扩展 x 的最后一维度到 dim 大小，使其和 prompt_embeddings 的嵌入维度匹配
+    x = x.expand(B * N, L, dim)  # [B*N, L, dim]
+
+    # 在序列维度上拼接: (B*N, prompt_token+L, dim)
+    combined_inputs = torch.cat([prompt, x], dim=1)
+    return combined_inputs
+
 class Model(nn.Module):
     def __init__(self, configs, device):
         super(Model, self).__init__()
@@ -150,7 +163,11 @@ class Model(nn.Module):
 
         prompt = self.tokenizer(prompt, return_tensors="pt", padding=True, truncation=True, max_length=2048).input_ids
 
-        prompt_embeddings = self.gpt2.get_input_embeddings()(prompt.to(x.device))  # (batch, prompt_token, dim)
+        prompt_embeddings = self.gpt2.get_input_embeddings()(prompt.to(x.device))  # (batch*N, prompt_token, dim)
+
+        input_embeddings = prompt_concat(prompt_embeddings,x)
+
+        print(input_embeddings.shape)
 
         # times net 1D->2D->1D
         x = self.timesnet.forward(x)
