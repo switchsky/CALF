@@ -84,6 +84,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)
                 outputs_dict = self.model(batch_x)
+
                 loss = criterion(outputs_dict, batch_y)
 
                 train_loss.append(loss.item())

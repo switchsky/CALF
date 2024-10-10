@@ -38,53 +38,32 @@ class Encoder_PCA(nn.Module):
         x = x.transpose(0, 1)
         return x_time, x
 
-def calcute_lags(x_enc):
-    q_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
-    k_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
-    res = q_fft * torch.conj(k_fft)
-    corr = torch.fft.irfft(res, dim=-1)
-    mean_value = torch.mean(corr, dim=1)
-    _, lags = torch.topk(mean_value, 5, dim=-1)
-    return lags
 def prompt_build(x,description,seq_len,pred_len):
     B, T, N = x.shape
     prompt = []
-    x_enc = x.permute(0, 2, 1).contiguous().reshape(B * N, T, 1)
-    min_values = torch.min(x_enc, dim=1)[0]  # 计算每个时间序列的最小值
-    max_values = torch.max(x_enc, dim=1)[0]  # 计算每个时间序列的最大值
-    medians = torch.median(x_enc, dim=1).values  # 计算每个时间序列的中位数
-    lags = calcute_lags(x_enc)  # 调用自定义的函数计算“时滞”（lags）
-    trends = x_enc.diff(dim=1).sum(dim=1)  # 计算每个时间序列的趋势（即每个时间步之间的差异之和）
-    for b in range(x_enc.shape[0]):
-        min_values_str = str(min_values[b].tolist()[0])  # 将最小值转换为字符串
-        max_values_str = str(max_values[b].tolist()[0])  # 将最大值转换为字符串
-        median_values_str = str(medians[b].tolist()[0])  # 将中位数转换为字符串
-        lags_values_str = str(lags[b].tolist())  # 将时滞转换为字符串
+    # 构建提示词
+    for b in range(B):  # 遍历每个样本
         prompt_ = (
-            f"<|start_prompt|>Dataset description: {description}"  # 数据集描述
-            f"Task description: forecast the next {str(pred_len)} steps given the previous {str(seq_len)} steps information; "
-            "Input statistics: "
-            f"min value {min_values_str}, "
-            f"max value {max_values_str}, "
-            f"median value {median_values_str}, "
-            f"the trend of input is {'upward' if trends[b] > 0 else 'downward'}, "  # 根据趋势值生成上升或下降趋势描述
-            f"top 5 lags are : {lags_values_str}<|<end_prompt>|>"  # 显示前5个时滞
+            f"<|start_prompt|>Dataset description: {description} "
+            f"Task description: forecast the next {str(pred_len)} steps given the previous {str(seq_len)} steps information. "
         )
         prompt.append(prompt_)
+
     return prompt
 
 def prompt_concat(prompt,x):
-    B, L, N = x.shape
-    x = x.permute(0, 2, 1).contiguous()  # 调整为 [B, N, L]
-    x = x.view(B * N, L, 1)  # 展平为 [B*N, L, 1]，以便于和每个变量对应的提示词拼接
-    dim = prompt.size(2)
+    B, length_text, dim = prompt.shape  # 提示词的形状
+    _, L, N = x.shape  # 时间序列的形状
 
-    # 为了在序列维度拼接，扩展 x 的最后一维度到 dim 大小，使其和 prompt_embeddings 的嵌入维度匹配
-    x = x.expand(B * N, L, dim)  # [B*N, L, dim]
+    # 1. 将时间序列 [B, L, N] 转换为 [B, L, dim]
+    # 使用线性层将 N 映射到 dim
+    projection_layer = nn.Linear(N, dim).to(x.device)
+    x_projected = projection_layer(x)  # 形状 [B, L, dim]
 
-    # 在序列维度上拼接: (B*N, prompt_token+L, dim)
-    combined_inputs = torch.cat([prompt, x], dim=1)
-    return combined_inputs
+    # 2. 在时序维度上拼接提示词和时间序列
+    concatenated = torch.cat([prompt, x_projected], dim=1)  # 形状 [B, length_text + L, dim]
+
+    return concatenated
 
 class Model(nn.Module):
     def __init__(self, configs, device):
@@ -161,13 +140,11 @@ class Model(nn.Module):
         # create prompt
         prompt = prompt_build(x,self.content,self.seq_len,self.pred_len)
 
-        prompt = self.tokenizer(prompt, return_tensors="pt", padding=True, truncation=True, max_length=2048).input_ids
+        prompt = self.tokenizer(prompt, return_tensors="pt", padding=True, truncation=True, max_length=1024).input_ids
 
         prompt_embeddings = self.gpt2.get_input_embeddings()(prompt.to(x.device))  # (batch*N, prompt_token, dim)
 
-        input_embeddings = prompt_concat(prompt_embeddings,x)
-
-        print(input_embeddings.shape)
+        input_with_prompt = prompt_concat(prompt_embeddings,x)
 
         # times net 1D->2D->1D
         x = self.timesnet.forward(x)
@@ -178,11 +155,10 @@ class Model(nn.Module):
 
         outputs_time, intermidiate_feat_time = self.gpt2(inputs_embeds=outputs_time1)
 
-
-        outputs_text, intermidiate_feat_text = self.gpt2_text(inputs_embeds=outputs_text1)
+        outputs_text, intermidiate_feat_text = self.gpt2_text(inputs_embeds=input_with_prompt)
         # residue connection
         outputs_time += outputs_time1
-        outputs_text += outputs_text1
+        outputs_text = outputs_text + input_with_prompt
         
         intermidiate_feat_time = tuple([self.time_proj[idx](feat) for idx, feat in enumerate(list(intermidiate_feat_time))])
         intermidiate_feat_text = tuple([self.text_proj[idx](feat) for idx, feat in enumerate(list(intermidiate_feat_text))])
@@ -261,8 +237,8 @@ class Model(nn.Module):
         outputs_text = self.out_layer(outputs_text)
 
         outputs_time = rearrange(outputs_time, 'b m l -> b l m')
-        outputs_text = rearrange(outputs_text, 'b m l -> b l m')
 
+        outputs_text = rearrange(outputs_text, 'b m l -> b l m')
         outputs_text = outputs_text * stdev + means
         outputs_time = outputs_time * stdev + means
 

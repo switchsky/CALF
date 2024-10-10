@@ -39,15 +39,15 @@ class cmLoss(nn.Module):
         )
         
         # feture regularization loss
-        feature_loss = sum(
-            [
-                (0.8**idx) * self.feature_loss(feat_time, feat_text)
-                for idx, (feat_time, feat_text) in enumerate(
-                    zip(intermidiate_feat_time[::-1], intermidiate_feat_text[::-1])
-                )
-            ]
-        )
-
+        # feature_loss = sum(
+        #     [
+        #         (0.8**idx) * self.feature_loss(feat_time, feat_text)
+        #         for idx, (feat_time, feat_text) in enumerate(
+        #             zip(intermidiate_feat_time[::-1], intermidiate_feat_text[::-1])
+        #         )
+        #     ]
+        # )
+        feature_loss = 0
         # output consistency loss
         if self.task_name == "long_term_forecast":
             output_loss = self.output_loss(outputs_time, outputs_text)
