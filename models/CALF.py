@@ -91,7 +91,6 @@ class Model(nn.Module):
         self.gpt2 = get_peft_model(self.gpt2, peft_config)
         
         word_embedding = torch.tensor(torch.load(configs.word_embedding_path)).to(device=device)
-        
         for i, (name, param) in enumerate(self.gpt2.named_parameters()):
             if 'ln' in name or 'wpe' in name or 'lora' in name:
                 param.requires_grad = True
@@ -125,7 +124,7 @@ class Model(nn.Module):
         
         self.cnt = 0
 
-        self.timesnet = TimesNet(configs,device).to(device)
+        self.timesnet = TimesNet(configs,device,word_embedding).to(device)
 
         
 
