@@ -105,12 +105,12 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
             print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
             train_loss = np.average(train_loss)
+            print("train_loss: {}".format(train_loss))
+        # vali_loss = self.vali(vali_data, vali_loader, criterion)
+        # test_loss = self.vali(test_data, test_loader, criterion)
 
-            vali_loss = self.vali(vali_data, vali_loader, criterion)
-            test_loss = self.vali(test_data, test_loader, criterion)
-
-            print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f} Test Loss: {4:.7f}".format(
-                epoch + 1, train_steps, train_loss, vali_loss, test_loss))
+        # print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f} Test Loss: {4:.7f}".format(
+        #     epoch + 1, train_steps, train_loss, vali_loss, test_loss))
 
             if self.args.cos:
                 scheduler.step()
@@ -118,12 +118,12 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             else:
                 adjust_learning_rate(model_optim, epoch + 1, self.args)
 
-            early_stopping(vali_loss, self.model, path)
-            if early_stopping.early_stop:
-                print("Early stopping")
-                break
-
+            # early_stopping(vali_loss, self.model, path)
+            # if early_stopping.early_stop:
+            #     print("Early stopping")
+            #     break
         best_model_path = path + '/' + 'checkpoint.pth'
+        torch.save(self.model.state_dict(), best_model_path)
         self.model.load_state_dict(torch.load(best_model_path))
 
         return self.model

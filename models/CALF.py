@@ -142,6 +142,7 @@ class Model(nn.Module):
         prompt_embeddings = self.gpt2.get_input_embeddings()(prompt.to(x.device))  # (batch*N, prompt_token, dim)
         _, length ,_ = prompt_embeddings.shape
         linear_layer = nn.Linear(length, 32).to(x.device)
+        linear_layer.train()
 
         # 在第二维（即 length）上应用线性层
         # 需要将 prompt_embeddings 转换为适合 nn.Linear 的形状：即 (batch*N, dim, prompt_token)
@@ -176,6 +177,7 @@ class Model(nn.Module):
         # 2. 拼接展平后的张量
         output_concat = torch.cat((outputs_text_flat, x_flat), dim=-1)
         self.tail_layer = nn.Linear(x1 + x2, self.pred_len*M).to(device=self.device)
+        self.tail_layer.train()
         outputs_time = self.tail_layer(output_concat)
         outputs_time = outputs_time.view(B, M, self.pred_len)
         outputs_time = rearrange(outputs_time, 'b m l -> b l m')

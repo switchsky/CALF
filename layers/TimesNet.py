@@ -41,7 +41,8 @@ class TimesNet(nn.Module):
         self.hidden_dim = hidden_dim
         self.cross_attention = nn.MultiheadAttention(embed_dim=hidden_dim, num_heads=num_heads)
         self.gpt2 = AccustumGPT2Model.from_pretrained('gpt2', output_attentions=True, output_hidden_states=True)
-        self.gpt2 = get_peft_model(self.gpt2, peft_config)
+        self.gpt2 = get_peft_model(self.gpt2, peft_config).train()
+        self.gpt2.to(self.device)
 
     def forward(self, x):
         B, T, N = x.size()
