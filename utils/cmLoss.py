@@ -24,18 +24,19 @@ class cmLoss(nn.Module):
         self.output_w = output_w
         self.feature_w = feature_w
 
-        self.feature_loss = loss_dict[feature_loss]
-        self.output_loss = loss_dict[output_loss]
+        # self.feature_loss = loss_dict[feature_loss]
+        # self.output_loss = loss_dict[output_loss]
         self.task_loss = loss_dict[task_loss]
         
         self.task_name = task_name
 
     def forward(self, outputs, batch_y, in_sample=None, freq_map=None, batch_y_mark=None):
-        outputs_text, outputs_time, intermidiate_feat_time, intermidiate_feat_text = (
-            outputs["outputs_text"],
+        outputs_time,device = (
+            # outputs["outputs_text"],
             outputs["outputs_time"],
-            outputs["intermidiate_time"],
-            outputs["intermidiate_text"],
+            # outputs["intermidiate_time"],
+            # outputs["intermidiate_text"],
+            outputs["device"]
         )
         
         # feture regularization loss
@@ -49,21 +50,20 @@ class cmLoss(nn.Module):
         # )
         feature_loss = 0
         # output consistency loss
-        if self.task_name == "long_term_forecast":
-            output_loss = self.output_loss(outputs_time, outputs_text)
-        elif self.task_name == "short_term_forecast":
-            output_loss = self.output_loss(in_sample, freq_map, outputs_time, outputs_text, batch_y_mark)
-        elif self.task_name == "classification":
-            output_loss = self.output_loss(outputs_time, outputs_text)
-        elif self.task_name == "imputation":
-            output_loss = self.output_loss(outputs_time, outputs_text)
-        elif self.task_name == "anomaly_detection":
-            output_loss = self.output_loss(outputs_time, outputs_text)
+        # if self.task_name == "long_term_forecast":
+        #     output_loss = self.output_loss(outputs_time, outputs_text)
+        # elif self.task_name == "short_term_forecast":
+        #     output_loss = self.output_loss(in_sample, freq_map, outputs_time, outputs_text, batch_y_mark)
+        # elif self.task_name == "classification":
+        #     output_loss = self.output_loss(outputs_time, outputs_text)
+        # elif self.task_name == "imputation":
+        #     output_loss = self.output_loss(outputs_time, outputs_text)
+        # elif self.task_name == "anomaly_detection":
+        #     output_loss = self.output_loss(outputs_time, outputs_text)
             
 
-        batch_y = batch_y.to(output_loss.device)
-        
-        # supervised task loss 
+        batch_y = batch_y.to(device)
+        # supervised task loss
         if self.task_name == "long_term_forecast":
             task_loss = self.task_loss(outputs_time, batch_y)
         elif self.task_name == "short_term_forecast":
@@ -75,5 +75,5 @@ class cmLoss(nn.Module):
         elif self.task_name == "anomaly_detection":
             task_loss = self.task_loss(outputs_time, batch_y)
 
-        total_loss = self.task_w * task_loss + self.output_w * output_loss + self.feature_w * feature_loss
+        total_loss = task_loss
         return total_loss

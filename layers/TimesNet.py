@@ -35,7 +35,7 @@ class TimesNet(nn.Module):
         self.seq_len = configs.seq_len
         self.k = 2
         # 划分成几份
-        self.patch_k = 3
+        self.patch_k = 4
         self.word_embedding = word_embedding.T
         _, hidden_dim = self.word_embedding.size()
         self.hidden_dim = hidden_dim
@@ -75,9 +75,9 @@ class TimesNet(nn.Module):
             # 1. 计算需要填充的长度，使得 P 能被 k 整除
             padding_length = (self.patch_k - (P % self.patch_k)) % self.patch_k  # 计算填充的长度
             if padding_length > 0:
-                # 2. 使用 F.pad 对 P 维度进行填充
-                # 填充在 P 维度（最后一维），因此在 F.pad 中 paddings 的形式为 (0, padding_length)
-                out = F.pad(out, (0, padding_length))  # 只对 P 维度进行填充
+                padding_tensor = torch.zeros(B, N, F, padding_length, device=out.device, dtype=out.dtype)
+                # 使用 torch.cat 在 P 维度拼接填充的 0 张量
+                out = torch.cat((out, padding_tensor), dim=-1)
 
             # 填充后新的 P 值
             P = P + padding_length
@@ -119,5 +119,5 @@ class TimesNet(nn.Module):
         # 对 res 的最后一维进行加权求和，weights_softmax 的形状需要与 res 的最后一维匹配
         res_weighted_sum = torch.sum(res * weights_softmax, dim=-1).to(device=self.device)  # (B, N, dim)
 
-        print("period_size:",res_weighted_sum.shape)  # 输出: (B, N, dim)
+        # print("period_size:",res_weighted_sum.shape)  # 输出: (B, N, dim)
         return res_weighted_sum

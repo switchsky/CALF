@@ -81,7 +81,7 @@ class Model(nn.Module):
         )
     
         self.task_name = configs.task_name
-    
+        self.device = device
         self.gpt2 = AccustumGPT2Model.from_pretrained('gpt2', output_attentions=True, output_hidden_states=True)  # loads a pretrained GPT-2 base model
         self.gpt2_text = AccustumGPT2Model.from_pretrained('gpt2', output_attentions=True, output_hidden_states=True)  # loads a pretrained GPT-2 base model
         self.tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
@@ -126,8 +126,6 @@ class Model(nn.Module):
 
         self.timesnet = TimesNet(configs,device,word_embedding).to(device)
 
-        
-
     def forecast(self, x):
         B, L, M = x.shape
 
@@ -142,40 +140,63 @@ class Model(nn.Module):
         prompt = self.tokenizer(prompt, return_tensors="pt", padding=True, truncation=True, max_length=1024).input_ids
 
         prompt_embeddings = self.gpt2.get_input_embeddings()(prompt.to(x.device))  # (batch*N, prompt_token, dim)
+        _, length ,_ = prompt_embeddings.shape
+        linear_layer = nn.Linear(length, 32).to(x.device)
 
-        input_with_prompt = prompt_concat(prompt_embeddings,x)
+        # 在第二维（即 length）上应用线性层
+        # 需要将 prompt_embeddings 转换为适合 nn.Linear 的形状：即 (batch*N, dim, prompt_token)
+        prompt_embeddings_transposed = prompt_embeddings.transpose(1, 2)  # (batch*N, dim, prompt_token)
 
-        # times net 1D->2D->1D
+        # 现在将线性层应用在 prompt_token 维度上
+        output_embeddings = linear_layer(prompt_embeddings_transposed)  # (batch*N, dim, 32)
+
+        # 如果需要将维度顺序恢复回原来的形状
+        output_embeddings = output_embeddings.transpose(1, 2)  # (batch*N, 32, dim)
+        prompt_embeddings_proto = prompt_embeddings.to(x.device)
+
+        input_with_prompt = prompt_concat(prompt_embeddings_proto,x)
+
+        # times net 1D->2D->1D x_shape:(B, N, dim)
         x = self.timesnet.forward(x)
 
-        x = rearrange(x, 'b l m -> b m l')
+       # x = rearrange(x, 'b l m -> b m l')
 
-        outputs_time1, outputs_text1 = self.in_layer(x)
+        #outputs_time1, outputs_text1 = self.in_layer(x)
 
-        outputs_time, intermidiate_feat_time = self.gpt2(inputs_embeds=outputs_time1)
+        #outputs_time, intermidiate_feat_time = self.gpt2(inputs_embeds=outputs_time1)
 
         outputs_text, intermidiate_feat_text = self.gpt2_text(inputs_embeds=input_with_prompt)
         # residue connection
-        outputs_time += outputs_time1
+        #outputs_time += outputs_time1
         outputs_text = outputs_text + input_with_prompt
-        
-        intermidiate_feat_time = tuple([self.time_proj[idx](feat) for idx, feat in enumerate(list(intermidiate_feat_time))])
-        intermidiate_feat_text = tuple([self.text_proj[idx](feat) for idx, feat in enumerate(list(intermidiate_feat_text))])
-
-        outputs_time = self.out_layer(outputs_time[:, -M:, :])
-        outputs_text = self.out_layer(outputs_text[:, -M:, :])
-
+        outputs_text_flat = outputs_text.view(B, -1)  # (B, T1 * dim1)
+        _, x1 = outputs_text_flat.shape
+        x_flat = x.view(B, -1)  # (B, T2 * dim2)
+        _, x2 = x_flat.shape
+        # 2. 拼接展平后的张量
+        output_concat = torch.cat((outputs_text_flat, x_flat), dim=-1)
+        self.tail_layer = nn.Linear(x1 + x2, self.pred_len*M).to(device=self.device)
+        outputs_time = self.tail_layer(output_concat)
+        outputs_time = outputs_time.view(B, M, self.pred_len)
         outputs_time = rearrange(outputs_time, 'b m l -> b l m')
-        outputs_text = rearrange(outputs_text, 'b m l -> b l m')
+        #print(outputs_time.shape)
+        #intermidiate_feat_time = tuple([self.time_proj[idx](feat) for idx, feat in enumerate(list(intermidiate_feat_time))])
+        # intermidiate_feat_text = tuple([self.text_proj[idx](feat) for idx, feat in enumerate(list(intermidiate_feat_text))])
 
-        outputs_text = outputs_text * stdev + means
+        #outputs_time = self.out_layer(outputs_time[:, -M:, :])
+        # outputs_text = self.out_layer(outputs_text[:, -M:, :])
+
+        #outputs_time = rearrange(outputs_time, 'b m l -> b l m')
+        # outputs_text = rearrange(outputs_text, 'b m l -> b l m')
+
+        # outputs_text = outputs_text * stdev + means
         outputs_time = outputs_time * stdev + means
 
         return {
-            'outputs_text': outputs_text,
             'outputs_time':outputs_time,
-            'intermidiate_time':intermidiate_feat_time,
-            'intermidiate_text':intermidiate_feat_text,
+            # 'intermidiate_time':intermidiate_feat_time,
+            # 'intermidiate_text':intermidiate_feat_text,
+            'device':self.device,
         }
 
 
